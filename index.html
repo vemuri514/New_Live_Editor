@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Editor</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<style>
+  :root{
+    --bg:#eef1f5; --panel:#fff; --ink:#1b2430; --muted:#6b7686; --line:#d6dce5;
+    --accent:#2455e6; --accent-ink:#fff; --gutter:#f5f7fa;
+    --c-tag:#c2410c; --c-attr:#7c3aed; --c-str:#15803d; --c-kw:#2455e6; --c-num:#b45309;
+  }
+  :root[data-theme="dark"]{
+    --bg:#10151c; --panel:#171e28; --ink:#e4e9f0; --muted:#8793a5; --line:#283241;
+    --accent:#6b93ff; --accent-ink:#0b1020; --gutter:#131a23;
+    --c-tag:#fb923c; --c-attr:#c4a5ff; --c-str:#6ee7a0; --c-kw:#8fb0ff; --c-num:#fbbf24;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column}
+  header{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+  h1{font-size:15px;margin:0 8px 0 0;font-weight:650}
+  .group{display:flex;gap:6px}
+  .spacer{flex:1}
+  .status{color:var(--muted);font-size:12px}
+  button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:6px 11px;border-radius:6px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+  button[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,var(--panel))}
+  button:focus-visible,.tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  main{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px}
+  .pane{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .tabs{display:flex;align-items:center;border-bottom:1px solid var(--line);background:var(--gutter)}
+  .tab{background:none;border:0;border-radius:0;padding:9px 16px;color:var(--muted);border-bottom:2px solid transparent}
+  .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+  .tabs .title{padding:9px 16px;font-weight:600}
+  .tabs .group{margin-left:auto;padding-right:8px}
+  .tabs button.sm{padding:3px 9px;font-size:12px}
+  .editors{flex:1;min-height:0;position:relative}
+  .CodeMirror{position:absolute;inset:0;height:auto;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--panel);color:var(--ink)}
+  .CodeMirror-gutters{background:var(--gutter);border-right:1px solid var(--line)}
+  .CodeMirror-linenumber{color:var(--muted)}
+  .CodeMirror-cursor{border-left-color:var(--ink)}
+  .CodeMirror-selected{background:color-mix(in srgb,var(--accent) 22%,transparent)!important}
+  .cm-tag{color:var(--c-tag)}.cm-attribute,.cm-property{color:var(--c-attr)}.cm-string{color:var(--c-str)}
+  .cm-keyword{color:var(--c-kw)}.cm-number,.cm-atom,.cm-builtin{color:var(--c-num)}
+  .cm-comment{color:var(--muted);font-style:italic}.cm-def,.cm-variable-2{color:var(--ink)}
+  .stage{flex:1;min-height:0;background:var(--bg);display:flex;justify-content:center;overflow:auto}
+  iframe{border:0;background:#fff;width:100%;height:100%;transition:width .2s}
+  .pane:fullscreen{border-radius:0}
+  .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .2s}
+  .toast.show{opacity:1}
+  @media (max-width:800px){main{grid-template-columns:1fr;grid-template-rows:1fr 1fr}}
+  @media (prefers-reduced-motion:reduce){iframe,.toast{transition:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Live Editor</h1>
+  <div class="group">
+    <button id="undo" title="Undo (Ctrl/Cmd+Z)">Undo</button>
+    <button id="redo" title="Redo (Ctrl/Cmd+Y)">Redo</button>
+    <button id="copy">Copy code</button>
+    <button id="wrap" aria-pressed="true">Wrap lines</button>
+  </div>
+  <div class="group" role="group" aria-label="Insert snippet">
+    <span class="status">Insert:</span>
+    <button data-snip="form">Contact form</button>
+    <button data-snip="login">Login form</button>
+    <button data-snip="navbar">Navbar</button>
+    <button data-snip="card">Card</button>
+    <button data-snip="table">Table</button>
+  </div>
+  <span class="spacer"></span>
+  <span class="status" id="status" role="status">Ready</span>
+  <div class="group">
+    <button id="theme">Dark mode</button>
+    <button id="reset">Reset</button>
+    <button id="download">Download .html</button>
+    <button class="primary" id="run">Run</button>
+  </div>
+</header>
+
+<main>
+  <section class="pane" aria-label="Code editors">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" data-t="html" aria-selected="true">HTML</button>
+      <button class="tab" role="tab" data-t="css" aria-selected="false">CSS</button>
+      <button class="tab" role="tab" data-t="js" aria-selected="false">JavaScript</button>
+    </div>
+    <div class="editors" id="editors"></div>
+  </section>
+  <section class="pane" id="previewPane" aria-label="Preview">
+    <div class="tabs">
+      <span class="title">Preview</span>
+      <div class="group">
+        <button class="sm" data-w="100%" aria-pressed="true">Desktop</button>
+        <button class="sm" data-w="768px" aria-pressed="false">Tablet</button>
+        <button class="sm" data-w="375px" aria-pressed="false">Phone</button>
+        <button class="sm" id="newtab">New tab</button>
+        <button class="sm" id="full">Fullscreen</button>
+      </div>
+    </div>
+    <div class="stage"><iframe id="preview" title="Preview" sandbox="allow-scripts allow-modals allow-forms allow-popups"></iframe></div>
+  </section>
+</main>
+<div class="toast" id="toast" role="status"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closetag.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<script>
+const KEY = 'live-editor-v1', THEME_KEY = 'live-editor-theme';
+const DEFAULTS = {
+  html: '<h1>Hello, localhost</h1>\n<p>Edit the HTML, CSS and JavaScript tabs. The preview updates as you type.</p>\n<button id="btn">Click me</button>\n<p id="out"></p>',
+  css: 'body {\n  font-family: system-ui, sans-serif;\n  max-width: 40rem;\n  margin: 3rem auto;\n  padding: 0 1rem;\n}\nbutton {\n  padding: .5rem 1rem;\n  font: inherit;\n}',
+  js: 'let n = 0;\ndocument.getElementById("btn").addEventListener("click", () => {\n  n++;\n  document.getElementById("out").textContent = "Clicked " + n + " time" + (n === 1 ? "" : "s");\n});'
+};
+const MODES = { html: 'htmlmixed', css: 'css', js: 'javascript' };
+const $ = id => document.getElementById(id);
+
+let saved = {};
+try { saved = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) {}
+const state = { ...DEFAULTS, ...saved };
+
+let active = 'html';
+const cms = {};
+for (const k of Object.keys(MODES)) {
+  const ta = document.createElement('textarea');
+  $('editors').appendChild(ta);
+  cms[k] = CodeMirror.fromTextArea(ta, {
+    mode: MODES[k], lineNumbers: true, lineWrapping: true, tabSize: 2,
+    indentWithTabs: false, autoCloseTags: k === 'html', autoCloseBrackets: true
+  });
+  cms[k].setValue(state[k]);
+  cms[k].clearHistory();
+  cms[k].on('change', schedule);
+  cms[k].getWrapperElement().style.display = k === 'html' ? '' : 'none';
+}
+
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1600);
+}
+
+/* Tabs */
+document.querySelectorAll('.tab[data-t]').forEach(tab => {
+  tab.addEventListener('click', () => {
+    active = tab.dataset.t;
+    document.querySelectorAll('.tab[data-t]').forEach(t => t.setAttribute('aria-selected', t === tab));
+    for (const k in cms) cms[k].getWrapperElement().style.display = k === active ? '' : 'none';
+    cms[active].refresh(); cms[active].focus();
+  });
+});
+
+/* Build + run */
+const frame = $('preview'), status = $('status');
+let timer;
+function build() {
+  const js = cms.js.getValue().replace(/<\/script>/gi, '<\\/script>');
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' + cms.css.getValue() +
+    '</style></head><body>' + cms.html.getValue() + '<script>' + js + '<\/script></body></html>';
+}
+function run() {
+  frame.srcdoc = build();
+  const data = {}; for (const k in cms) data[k] = cms[k].getValue();
+  try { localStorage.setItem(KEY, JSON.stringify(data)); status.textContent = 'Saved in this browser'; }
+  catch (e) { status.textContent = 'Running (could not save)'; }
+}
+function schedule() { status.textContent = 'Typing…'; clearTimeout(timer); timer = setTimeout(run, 400); }
+
+/* Header buttons */
+$('run').onclick = run;
+$('undo').onclick = () => { cms[active].undo(); cms[active].focus(); };
+$('redo').onclick = () => { cms[active].redo(); cms[active].focus(); };
+$('copy').onclick = async () => {
+  try { await navigator.clipboard.writeText(cms[active].getValue()); toast('Copied ' + active.toUpperCase() + ' code'); }
+  catch (e) { cms[active].focus(); cms[active].execCommand('selectAll'); document.execCommand('copy'); toast('Copied ' + active.toUpperCase() + ' code'); }
+};
+$('wrap').onclick = e => {
+  const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+  e.currentTarget.setAttribute('aria-pressed', on);
+  for (const k in cms) cms[k].setOption('lineWrapping', on);
+};
+$('download').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([build()], { type: 'text/html' }));
+  a.download = 'page.html'; a.click(); URL.revokeObjectURL(a.href);
+};
+$('reset').onclick = () => {
+  if (!confirm('Replace all three editors with the starter code?')) return;
+  for (const k in cms) { cms[k].setValue(DEFAULTS[k]); cms[k].clearHistory(); }
+  run(); toast('Reset to starter code');
+};
+
+/* Theme */
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $('theme').textContent = t === 'dark' ? 'Light mode' : 'Dark mode';
+  try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+}
+let startTheme = null;
+try { startTheme = localStorage.getItem(THEME_KEY); } catch (e) {}
+setTheme(startTheme || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light'));
+$('theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+
+/* Preview buttons */
+document.querySelectorAll('button[data-w]').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('button[data-w]').forEach(x => x.setAttribute('aria-pressed', x === b));
+    frame.style.width = b.dataset.w;
+  };
+});
+$('newtab').onclick = () => {
+  const url = URL.createObjectURL(new Blob([build()], { type: 'text/html' }));
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+};
+$('full').onclick = () => {
+  const p = $('previewPane');
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (p.requestFullscreen) p.requestFullscreen(); else toast('Fullscreen not supported here');
+};
+
+/* Insert snippets: HTML goes at the cursor, CSS and JS are appended to their tabs */
+const SNIPPETS = {
+  form: {
+    html: `<form class="contact-form">
+  <h2>Contact us</h2>
+  <label>Name <input name="name" type="text" required></label>
+  <label>Email <input name="email" type="email" required></label>
+  <label>Message <textarea name="message" rows="4" required></textarea></label>
+  <button type="submit">Send message</button>
+  <p class="form-msg" role="status"></p>
+</form>`,
+    css: `/* contact-form */
+.contact-form { display: grid; gap: 12px; max-width: 24rem; padding: 20px; border: 1px solid #cfd6e0; border-radius: 8px; }
+.contact-form label { display: grid; gap: 4px; font-weight: 600; }
+.contact-form input, .contact-form textarea { font: inherit; padding: 8px; border: 1px solid #b8c1ce; border-radius: 6px; }
+.contact-form button { padding: 10px; background: #2455e6; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+.form-msg { margin: 0; color: #15803d; }`,
+    js: `// contact-form
+document.querySelectorAll(".contact-form").forEach(form => {
+  form.addEventListener("submit", e => {
+    e.preventDefault();
+    const name = form.elements.name.value;
+    form.querySelector(".form-msg").textContent = "Thanks, " + name + ". Your message was sent.";
+    form.reset();
+  });
+});`
+  },
+  login: {
+    html: `<form class="login-form">
+  <h2>Sign in</h2>
+  <label>Email <input name="email" type="email" required></label>
+  <label>Password <input name="password" type="password" minlength="6" required></label>
+  <label class="inline"><input type="checkbox" class="show-pw"> Show password</label>
+  <button type="submit">Sign in</button>
+  <p class="login-msg" role="status"></p>
+</form>`,
+    css: `/* login-form */
+.login-form { display: grid; gap: 12px; max-width: 20rem; padding: 20px; border: 1px solid #cfd6e0; border-radius: 8px; }
+.login-form label { display: grid; gap: 4px; font-weight: 600; }
+.login-form label.inline { display: flex; gap: 8px; align-items: center; font-weight: 400; }
+.login-form input:not([type=checkbox]) { font: inherit; padding: 8px; border: 1px solid #b8c1ce; border-radius: 6px; }
+.login-form button { padding: 10px; background: #2455e6; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+.login-msg { margin: 0; }`,
+    js: `// login-form
+document.querySelectorAll(".login-form").forEach(form => {
+  form.querySelector(".show-pw").addEventListener("change", e => {
+    form.elements.password.type = e.target.checked ? "text" : "password";
+  });
+  form.addEventListener("submit", e => {
+    e.preventDefault();
+    form.querySelector(".login-msg").textContent = "Signed in as " + form.elements.email.value + " (demo only, nothing is sent).";
+  });
+});`
+  },
+  navbar: {
+    html: `<nav class="navbar">
+  <strong>My Site</strong>
+  <a href="#home">Home</a>
+  <a href="#about">About</a>
+  <a href="#contact">Contact</a>
+</nav>`,
+    css: `/* navbar */
+.navbar { display: flex; gap: 20px; align-items: center; padding: 12px 20px; background: #1b2430; }
+.navbar strong { color: #fff; margin-right: auto; }
+.navbar a { color: #cfd6e0; text-decoration: none; }
+.navbar a:hover { color: #fff; }`,
+    js: ''
+  },
+  card: {
+    html: `<article class="card">
+  <h3>Card title</h3>
+  <p>A short description goes here.</p>
+  <button class="card-btn">Like</button>
+</article>`,
+    css: `/* card */
+.card { max-width: 18rem; padding: 18px; border: 1px solid #cfd6e0; border-radius: 10px; }
+.card h3 { margin-top: 0; }
+.card-btn { padding: 6px 14px; border: 1px solid #2455e6; background: #fff; color: #2455e6; border-radius: 6px; cursor: pointer; }`,
+    js: `// card
+document.querySelectorAll(".card-btn").forEach(btn => {
+  let likes = 0;
+  btn.addEventListener("click", () => { likes++; btn.textContent = "Liked " + likes; });
+});`
+  },
+  table: {
+    html: `<table class="data-table">
+  <thead><tr><th>Name</th><th>Role</th><th>City</th></tr></thead>
+  <tbody>
+    <tr><td>Asha</td><td>Designer</td><td>Bengaluru</td></tr>
+    <tr><td>Ravi</td><td>Developer</td><td>Mysuru</td></tr>
+  </tbody>
+</table>`,
+    css: `/* data-table */
+.data-table { border-collapse: collapse; width: 100%; max-width: 32rem; }
+.data-table th, .data-table td { padding: 8px 12px; border: 1px solid #cfd6e0; text-align: left; }
+.data-table th { background: #f0f3f8; }`,
+    js: ''
+  }
+};
+
+function insertSnippet(name) {
+  const s = SNIPPETS[name];
+  cms.html.replaceSelection('\n' + s.html + '\n');
+  [['css', s.css], ['js', s.js]].forEach(([k, code]) => {
+    if (!code) return;
+    const marker = code.split('\n')[0];
+    if (cms[k].getValue().includes(marker)) return;
+    const cur = cms[k].getValue();
+    cms[k].setValue(cur + (cur.trim() ? '\n\n' : '') + code);
+  });
+  document.querySelector('.tab[data-t="html"]').click();
+  run();
+  toast('Inserted ' + name + ' (CSS and JS added if needed)');
+}
+document.querySelectorAll('button[data-snip]').forEach(b => b.onclick = () => insertSnippet(b.dataset.snip));
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); run(); }
+});
+
+run();
+</script>
+</body>
+</html>
